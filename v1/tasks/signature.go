@@ -2,8 +2,9 @@ package tasks
 
 import (
 	"fmt"
-	"github.com/RichardKnop/machinery/v1/utils"
 	"time"
+
+	"github.com/3rdStone/machinery/v1/utils"
 
 	"github.com/google/uuid"
 )

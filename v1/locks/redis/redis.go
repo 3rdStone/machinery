@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/RichardKnop/machinery/v1/config"
+	"github.com/3rdStone/machinery/v1/config"
 	"github.com/redis/go-redis/v9"
 )
 
