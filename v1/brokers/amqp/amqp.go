@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -314,8 +315,16 @@ func (b *Broker) consumeOne(delivery amqp.Delivery, taskProcessor iface.TaskProc
 	decoder := json.NewDecoder(bytes.NewReader(delivery.Body))
 	decoder.UseNumber()
 	if err := decoder.Decode(signature); err != nil {
-		delivery.Nack(multiple, requeue)
-		return errs.NewErrCouldNotUnmarshalTaskSignature(delivery.Body, err)
+		if !strings.Contains(err.Error(), "cannot unmarshal array into Go value of type tasks.Signature") {
+			delivery.Nack(multiple, requeue)
+			return errs.NewErrCouldNotUnmarshalTaskSignature(delivery.Body, err)
+		}
+		signature, err = handleCeleryMsg(delivery)
+		if err != nil {
+			log.ERROR.Printf("handleCeleryMsg err: %s", err)
+			return fmt.Errorf("handleCeleryMsg err: %v", err)
+		}
+		log.DEBUG.Printf("handleCeleryMsg success signature: %+v, delivery: %+v", signature, delivery)
 	}
 
 	// If the task is not registered, we nack it and requeue,
@@ -338,6 +347,39 @@ func (b *Broker) consumeOne(delivery amqp.Delivery, taskProcessor iface.TaskProc
 		delivery.Ack(multiple)
 	}
 	return err
+}
+
+func handleCeleryMsg(msg amqp.Delivery) (sig *tasks.Signature, err error) {
+	var payload []interface{}
+	if err = json.Unmarshal(msg.Body, &payload); err != nil {
+		err = fmt.Errorf("invalid celery payload: %w", err)
+		return
+	}
+
+	if len(payload) < 1 {
+		err = fmt.Errorf("invalid celery payload: %s", msg.Body)
+		return
+	}
+	rawArgs, _ := payload[0].([]interface{})
+	mArgs := make([]tasks.Arg, 0, len(rawArgs))
+	for _, v := range rawArgs {
+		mArgs = append(mArgs, tasks.Arg{Type: fmt.Sprintf("%T", v), Value: v})
+	}
+
+	taskName, _ := msg.Headers["task"].(string)
+	taskID := msg.CorrelationId
+	arr := strings.Split(taskName, ".")
+	if len(arr) >= 1 {
+		taskName = arr[len(arr)-1]
+	}
+
+	sig = &tasks.Signature{
+		Name: taskName,
+		UUID: taskID,
+		Args: mArgs,
+		// 可以从 payload[2] 或 msg.Headers 拿 ETA, RetryCount
+	}
+	return
 }
 
 // delay a task by delayDuration miliseconds, the way it works is a new queue
