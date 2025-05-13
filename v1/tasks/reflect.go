@@ -43,6 +43,9 @@ var (
 		"[]float64": reflect.TypeOf(make([]float64, 0)),
 		"[]byte":    reflect.TypeOf(make([]byte, 0)),
 		"[]string":  reflect.TypeOf([]string{""}),
+		// maps
+		"map[string]any":          reflect.TypeOf(map[string]any{}),
+		"map[string]interface {}": reflect.TypeOf(map[string]interface{}{}),
 	}
 
 	ctxType = reflect.TypeOf((*context.Context)(nil)).Elem()
