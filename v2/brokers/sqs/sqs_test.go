@@ -11,8 +11,14 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/RichardKnop/machinery/v2"
+	eagerbackend "github.com/RichardKnop/machinery/v2/backends/eager"
+	backendsiface "github.com/RichardKnop/machinery/v2/backends/iface"
+	"github.com/RichardKnop/machinery/v2/backends/redis"
+	brokersiface "github.com/RichardKnop/machinery/v2/brokers/iface"
 	"github.com/RichardKnop/machinery/v2/brokers/sqs"
 	"github.com/RichardKnop/machinery/v2/config"
+	locksiface "github.com/RichardKnop/machinery/v2/locks/iface"
+	redislock "github.com/RichardKnop/machinery/v2/locks/redis"
 	"github.com/RichardKnop/machinery/v2/retry"
 
 	awssqs "github.com/aws/aws-sdk-go/service/sqs"
@@ -21,11 +27,19 @@ import (
 var (
 	cnf                  *config.Config
 	receiveMessageOutput *awssqs.ReceiveMessageOutput
+	broker               brokersiface.Broker
+	backend              backendsiface.Backend
+	lock                 locksiface.Lock
 )
 
 func init() {
 	cnf = sqs.NewTestConfig()
 	receiveMessageOutput = sqs.ReceiveMessageOutput
+
+	// 初始化测试用的 broker、backend 和 lock
+	broker = sqs.NewTestBroker()
+	backend = redis.New(cnf, "localhost", "", "", 0)
+	lock = redislock.New(cnf, []string{"localhost:6379"}, 0, 3)
 }
 
 func TestNewAWSSQSBroker(t *testing.T) {
@@ -87,10 +101,7 @@ func TestPrivateFunc_continueReceivingMessages(t *testing.T) {
 
 func TestPrivateFunc_consume(t *testing.T) {
 
-	server1, err := machinery.NewServer(cnf)
-	if err != nil {
-		t.Fatal(err)
-	}
+	server1 := machinery.NewServer(cnf, broker, backend, lock)
 	pool := make(chan struct{})
 	wk := server1.NewWorker("sms_worker", 0)
 	deliveries := make(chan *awssqs.ReceiveMessageOutput)
@@ -101,20 +112,17 @@ func TestPrivateFunc_consume(t *testing.T) {
 	broker := sqs.NewTestBroker()
 
 	// an infinite loop will be executed only when there is no error
-	err = broker.ConsumeForTest(deliveries, 0, wk, pool)
+	err := broker.ConsumeForTest(deliveries, 0, wk, pool)
 	assert.NotNil(t, err)
 }
 
 func TestPrivateFunc_consumeOne(t *testing.T) {
 
-	server1, err := machinery.NewServer(cnf)
-	if err != nil {
-		t.Fatal(err)
-	}
+	server1 := machinery.NewServer(cnf, broker, backend, lock)
 	wk := server1.NewWorker("sms_worker", 0)
 	broker := sqs.NewTestBroker()
 
-	err = broker.ConsumeOneForTest(receiveMessageOutput, wk)
+	err := broker.ConsumeOneForTest(receiveMessageOutput, wk)
 	assert.NotNil(t, err)
 
 	outputCopy := *receiveMessageOutput
@@ -143,10 +151,7 @@ func TestPrivateFunc_initializePool(t *testing.T) {
 
 func TestPrivateFunc_startConsuming(t *testing.T) {
 
-	server1, err := machinery.NewServer(cnf)
-	if err != nil {
-		t.Fatal(err)
-	}
+	server1 := machinery.NewServer(cnf, broker, backend, lock)
 
 	wk := server1.NewWorker("sms_worker", 0)
 	broker := sqs.NewTestBroker()
@@ -197,10 +202,7 @@ func TestPrivateFunc_consumeDeliveries(t *testing.T) {
 	pool := make(chan struct{}, concurrency)
 	errorsChan := make(chan error)
 	deliveries := make(chan *awssqs.ReceiveMessageOutput)
-	server1, err := machinery.NewServer(cnf)
-	if err != nil {
-		t.Fatal(err)
-	}
+	server1 := machinery.NewServer(cnf, broker, backend, lock)
 
 	wk := server1.NewWorker("sms_worker", 0)
 	broker := sqs.NewTestBroker()
@@ -265,10 +267,7 @@ func TestPrivateFunc_deleteOne(t *testing.T) {
 
 func Test_CustomQueueName(t *testing.T) {
 
-	server1, err := machinery.NewServer(cnf)
-	if err != nil {
-		t.Fatal(err)
-	}
+	server1 := machinery.NewServer(cnf, broker, backend, lock)
 
 	broker := sqs.NewTestBroker()
 
@@ -286,7 +285,12 @@ func TestPrivateFunc_consumeWithConcurrency(t *testing.T) {
 	msg := `{
         "UUID": "uuid-dummy-task",
         "Name": "test-task",
-        "RoutingKey": "dummy-routing"
+        "RoutingKey": "dummy-routing",
+        "Args": [],
+        "Headers": {},
+        "Immutable": false,
+        "RetryCount": 0,
+        "RetryTimeout": 0
 	}
 	`
 
@@ -294,22 +298,22 @@ func TestPrivateFunc_consumeWithConcurrency(t *testing.T) {
 	output := make(chan string) // The output channel
 
 	cnf.ResultBackend = "eager"
-	server1, err := machinery.NewServer(cnf)
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = server1.RegisterTask("test-task", func(ctx context.Context) error {
+	// 为这个测试创建一个新的 eager backend
+	eagerBackend := eagerbackend.New()
+	server1 := machinery.NewServer(cnf, broker, eagerBackend, lock)
+	err := server1.RegisterTask("test-task", func(ctx context.Context) error {
 		output <- testResp
 
 		return nil
 	})
 
-	broker := sqs.NewTestBroker()
+	testBroker := sqs.NewTestBroker()
 
-	broker.SetRegisteredTaskNames([]string{"test-task"})
+	testBroker.SetRegisteredTaskNames([]string{"test-task"})
 	assert.NoError(t, err)
-	pool := make(chan struct{}, 1)
+	pool := make(chan struct{}, 2) // 增加容量
 	pool <- struct{}{}
+	pool <- struct{}{} // 添加第二个信号
 	wk := server1.NewWorker("sms_worker", 1)
 	deliveries := make(chan *awssqs.ReceiveMessageOutput)
 	outputCopy := *receiveMessageOutput
@@ -320,13 +324,17 @@ func TestPrivateFunc_consumeWithConcurrency(t *testing.T) {
 		},
 	}
 
+	// 启动消费 goroutine
 	go func() {
-		deliveries <- &outputCopy
-
+		err = testBroker.ConsumeForTest(deliveries, 1, wk, pool)
 	}()
 
+	// 等待一小段时间确保消费 goroutine 启动
+	time.Sleep(100 * time.Millisecond)
+
+	// 发送消息
 	go func() {
-		err = broker.ConsumeForTest(deliveries, 1, wk, pool)
+		deliveries <- &outputCopy
 	}()
 
 	select {
