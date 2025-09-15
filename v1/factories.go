@@ -15,6 +15,7 @@ import (
 	eagerbroker "github.com/RichardKnop/machinery/v1/brokers/eager"
 	gcppubsubbroker "github.com/RichardKnop/machinery/v1/brokers/gcppubsub"
 	brokeriface "github.com/RichardKnop/machinery/v1/brokers/iface"
+	natsbroker "github.com/RichardKnop/machinery/v1/brokers/nats"
 	redisbroker "github.com/RichardKnop/machinery/v1/brokers/redis"
 	sqsbroker "github.com/RichardKnop/machinery/v1/brokers/sqs"
 
@@ -102,6 +103,10 @@ func BrokerFactory(cnf *config.Config) (brokeriface.Broker, error) {
 			return nil, err
 		}
 		return gcppubsubbroker.New(cnf, projectID, subscriptionName)
+	}
+
+	if strings.HasPrefix(cnf.Broker, "nats://") {
+		return natsbroker.New(cnf), nil
 	}
 
 	return nil, fmt.Errorf("Factory failed with broker URL: %v", cnf.Broker)

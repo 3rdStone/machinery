@@ -9,6 +9,7 @@ import (
 	"cloud.google.com/go/pubsub"
 	"github.com/aws/aws-sdk-go/service/dynamodb"
 	"github.com/aws/aws-sdk-go/service/sqs"
+	"github.com/nats-io/nats.go"
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
@@ -43,6 +44,12 @@ var (
 			NormalTasksPollPeriod:  1000,
 			DelayedTasksPollPeriod: 500,
 		},
+		NATS: &NATSConfig{
+			URL:           "nats://localhost:4222",
+			MaxReconnects: 5,
+			ReconnectWait: 2 * time.Second,
+			Timeout:       5 * time.Second,
+		},
 		GCPPubSub: &GCPPubSubConfig{
 			Client: nil,
 		},
@@ -62,6 +69,7 @@ type Config struct {
 	AMQP                    *AMQPConfig      `yaml:"amqp"`
 	SQS                     *SQSConfig       `yaml:"sqs"`
 	Redis                   *RedisConfig     `yaml:"redis"`
+	NATS                    *NATSConfig      `yaml:"nats"`
 	GCPPubSub               *GCPPubSubConfig `yaml:"-" ignored:"true"`
 	MongoDB                 *MongoDBConfig   `yaml:"-" ignored:"true"`
 	TLSConfig               *tls.Config
@@ -166,6 +174,25 @@ type RedisConfig struct {
 type GCPPubSubConfig struct {
 	Client       *pubsub.Client
 	MaxExtension time.Duration
+}
+
+// NATSConfig wraps NATS related configuration
+type NATSConfig struct {
+	URL           string        `yaml:"url" envconfig:"NATS_URL"`
+	MaxReconnects int           `yaml:"max_reconnects" envconfig:"NATS_MAX_RECONNECTS"`
+	ReconnectWait time.Duration `yaml:"reconnect_wait" envconfig:"NATS_RECONNECT_WAIT"`
+	Timeout       time.Duration `yaml:"timeout" envconfig:"NATS_TIMEOUT"`
+	Client        *nats.Conn    `yaml:"-" ignored:"true"`
+	// 队列配置
+	SubjectPrefix string `yaml:"subject_prefix" envconfig:"NATS_SUBJECT_PREFIX"`
+	// 重试配置
+	RetryOnFailedConnect bool          `yaml:"retry_on_failed_connect" envconfig:"NATS_RETRY_ON_FAILED_CONNECT"`
+	RetryAttempts        int           `yaml:"retry_attempts" envconfig:"NATS_RETRY_ATTEMPTS"`
+	RetryDelay           time.Duration `yaml:"retry_delay" envconfig:"NATS_RETRY_DELAY"`
+	// 连接池配置
+	MaxConnections int `yaml:"max_connections" envconfig:"NATS_MAX_CONNECTIONS"`
+	// 消息配置
+	MaxPayload int64 `yaml:"max_payload" envconfig:"NATS_MAX_PAYLOAD"`
 }
 
 // MongoDBConfig ...

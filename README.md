@@ -101,6 +101,7 @@ cd v2/
 go run example/amqp/main.go worker
 go run example/redigo/main.go worker // Redis with redigo driver
 go run example/go-redis/main.go worker // Redis with Go Redis driver
+go run example/nats/main.go worker // NATS broker
 
 go run example/amqp/main.go worker
 go run example/redis/main.go worker
@@ -115,6 +116,7 @@ cd v2
 go run v2/example/amqp/main.go send
 go run v2/example/redigo/main.go send // Redis with redigo driver
 go run v2/example/go-redis/main.go send // Redis with Go Redis driver
+go run v2/example/nats/main.go send // NATS broker
 ```
 
 You will be able to see the tasks being processed asynchronously by the worker:
@@ -184,6 +186,39 @@ For example:
 
 1. `redis://localhost:6379`, or with password `redis://password@localhost:6379`
 2. `redis+socket://password@/path/to/file.sock:/0`
+
+##### NATS
+
+Use NATS URL in the format:
+
+```
+nats://[username:password@]host[:port]
+```
+
+For example:
+
+1. `nats://localhost:4222`
+2. `nats://user:pass@localhost:4222`
+
+NATS is a high-performance, lightweight messaging system that provides excellent performance for task queues. It supports both basic messaging and JetStream for advanced features like message persistence and delayed delivery.
+
+To use a manually configured NATS Client:
+
+```go
+natsClient, err := nats.Connect("nats://localhost:4222")
+cnf := &config.Config{
+  Broker:          "nats://localhost:4222"
+  DefaultQueue:    "machinery_tasks",
+  ResultBackend:   "YOUR_BACKEND_URL",
+  NATS: config.NATSConfig{
+    Client: natsClient,
+    SubjectPrefix: "machinery",
+    MaxReconnects: 5,
+    ReconnectWait: 2 * time.Second,
+    Timeout: 5 * time.Second,
+  },
+}
+```
 
 ##### AWS SQS
 
