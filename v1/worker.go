@@ -133,8 +133,8 @@ func (worker *Worker) Quit() {
 }
 
 const (
-	LOG_KEY_START_TIME          = "log_start_time"
-	LOG_KEY_DELAY_LIMIT_SECONDS = "log_delay_limit_seconds"
+	LOG_KEY_START_TIME = "log_start_time"
+	HeaderExpireInMs   = "x-task-expire-in-ms"
 )
 
 func GetStartMilSecCtx(ctx context.Context) int64 {
@@ -203,15 +203,15 @@ func (worker *Worker) Process(signature *tasks.Signature) error {
 	if signature.ETA != nil && startTime != 0 {
 		delay = time.UnixMilli(startTime).Sub(*signature.ETA)
 	}
-	delayLimitSeconds, ok := signature.Headers[LOG_KEY_DELAY_LIMIT_SECONDS].(int64)
+	delayLimitMs, ok := signature.Headers[HeaderExpireInMs].(int64)
 	if !ok {
-		delayLimitSeconds = 0
+		delayLimitMs = 0
 	}
-	if delayLimitSeconds > 0 && delay > time.Second*time.Duration(delayLimitSeconds) {
-		log.WARNING.Printf("task delayed! task name:%s, uuid:%s, delay:%v, delayLimitSeconds:%d", signature.Name, signature.UUID, delay, delayLimitSeconds)
+	if delayLimitMs > 0 && delay > time.Millisecond*time.Duration(delayLimitMs) {
+		log.WARNING.Printf("task delayed! task name:%s, uuid:%s, delay:%v, delayLimitMs:%d", signature.Name, signature.UUID, delay, delayLimitMs)
 		return nil
 	} else { // todo @hsy remove
-		log.INFO.Printf("task not delayed! task name:%s, uuid:%s, delay:%v, delayLimitSeconds:%d", signature.Name, signature.UUID, delay, delayLimitSeconds)
+		log.INFO.Printf("task not delayed! task name:%s, uuid:%s, delay:%v, delayLimitMs:%d", signature.Name, signature.UUID, delay, delayLimitMs)
 	}
 
 	// Call the task
