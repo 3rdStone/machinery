@@ -11,7 +11,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/opentracing/opentracing-go"
+	"github.com/spf13/cast"
 
 	"github.com/3rdStone/machinery/v1/backends/amqp"
 	"github.com/3rdStone/machinery/v1/brokers/errs"
@@ -130,6 +132,42 @@ func (worker *Worker) Quit() {
 	worker.server.GetBroker().StopConsuming()
 }
 
+const (
+	LOG_KEY_START_TIME = "log_start_time"
+	HeaderExpireInMs   = "x-task-expire-in-ms"
+)
+
+func GetStartMilSecCtx(ctx context.Context) int64 {
+	var startTime int64
+	// 尝试从 gin.Context 获取
+	if ginCtx, ok := ctx.(*gin.Context); ok {
+		startTime = cast.ToInt64(ginCtx.GetHeader(LOG_KEY_START_TIME))
+	} else {
+		// 如果不是 gin.Context，尝试从 context.Value 获取
+		startTime = cast.ToInt64(ctx.Value(LOG_KEY_START_TIME))
+	}
+	return startTime
+}
+
+func CheckTaskIsDelayed(ctx context.Context, signature *tasks.Signature) bool {
+	var delay time.Duration
+	startTime := GetStartMilSecCtx(ctx)
+	if signature.ETA != nil && startTime != 0 {
+		delay = time.UnixMilli(startTime).Sub(*signature.ETA)
+	}
+	delayLimitMs, ok := signature.Headers[HeaderExpireInMs].(int64)
+	if !ok {
+		delayLimitMs = 0
+	}
+	if delayLimitMs > 0 && delay > time.Millisecond*time.Duration(delayLimitMs) {
+		log.WARNING.Printf("CheckTaskIsDelayed: true! task name:%s, uuid:%s, delay:%v, delayLimitMs:%d", signature.Name, signature.UUID, delay, delayLimitMs)
+		return true
+	} else { // todo @hsy remove
+		log.INFO.Printf("CheckTaskIsDelayed: false! task name:%s, uuid:%s, delay:%v, delayLimitMs:%d", signature.Name, signature.UUID, delay, delayLimitMs)
+		return false
+	}
+}
+
 // Process handles received tasks and triggers success/error callbacks
 func (worker *Worker) Process(signature *tasks.Signature) error {
 	// If the task is not registered with this worker, do not continue
@@ -179,6 +217,10 @@ func (worker *Worker) Process(signature *tasks.Signature) error {
 		defer func() {
 			task.Context = worker.postTaskHandler(task.Context, signature)
 		}()
+	}
+
+	if CheckTaskIsDelayed(task.Context, signature) {
+		return nil
 	}
 
 	// Call the task
