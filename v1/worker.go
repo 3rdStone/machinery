@@ -1,6 +1,7 @@
 package machinery
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/url"
@@ -10,7 +11,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/opentracing/opentracing-go"
+	"github.com/spf13/cast"
 
 	"github.com/RichardKnop/machinery/v1/backends/amqp"
 	"github.com/RichardKnop/machinery/v1/brokers/errs"
@@ -129,6 +132,23 @@ func (worker *Worker) Quit() {
 	worker.server.GetBroker().StopConsuming()
 }
 
+const (
+	LOG_KEY_START_TIME          = "log_start_time"
+	LOG_KEY_DELAY_LIMIT_SECONDS = "log_delay_limit_seconds"
+)
+
+func GetStartMilSecCtx(ctx context.Context) int64 {
+	var startTime int64
+	// 尝试从 gin.Context 获取
+	if ginCtx, ok := ctx.(*gin.Context); ok {
+		startTime = cast.ToInt64(ginCtx.GetHeader(LOG_KEY_START_TIME))
+	} else {
+		// 如果不是 gin.Context，尝试从 context.Value 获取
+		startTime = cast.ToInt64(ctx.Value(LOG_KEY_START_TIME))
+	}
+	return startTime
+}
+
 // Process handles received tasks and triggers success/error callbacks
 func (worker *Worker) Process(signature *tasks.Signature) error {
 	// If the task is not registered with this worker, do not continue
@@ -176,6 +196,22 @@ func (worker *Worker) Process(signature *tasks.Signature) error {
 	//Defer run handler for the end of the task
 	if worker.postTaskHandler != nil {
 		defer worker.postTaskHandler(signature)
+	}
+
+	var delay time.Duration
+	startTime := GetStartMilSecCtx(task.Context)
+	if signature.ETA != nil && startTime != 0 {
+		delay = time.UnixMilli(startTime).Sub(*signature.ETA)
+	}
+	delayLimitSeconds, ok := signature.Headers[LOG_KEY_DELAY_LIMIT_SECONDS].(int64)
+	if !ok {
+		delayLimitSeconds = 0
+	}
+	if delayLimitSeconds > 0 && delay > time.Second*time.Duration(delayLimitSeconds) {
+		log.WARNING.Printf("task delayed! task name:%s, uuid:%s, delay:%v, delayLimitSeconds:%d", signature.Name, signature.UUID, delay, delayLimitSeconds)
+		return nil
+	} else { // todo @hsy remove
+		log.INFO.Printf("task not delayed! task name:%s, uuid:%s, delay:%v, delayLimitSeconds:%d", signature.Name, signature.UUID, delay, delayLimitSeconds)
 	}
 
 	// Call the task
@@ -400,27 +436,26 @@ func (worker *Worker) SetErrorHandler(handler func(err error)) {
 	worker.errorHandler = handler
 }
 
-//SetPreTaskHandler sets a custom handler func before a job is started
+// SetPreTaskHandler sets a custom handler func before a job is started
 func (worker *Worker) SetPreTaskHandler(handler func(*tasks.Signature)) {
 	worker.preTaskHandler = handler
 }
 
-//SetPostTaskHandler sets a custom handler for the end of a job
+// SetPostTaskHandler sets a custom handler for the end of a job
 func (worker *Worker) SetPostTaskHandler(handler func(*tasks.Signature)) {
 	worker.postTaskHandler = handler
 }
 
-//SetPreConsumeHandler sets a custom handler for the end of a job
+// SetPreConsumeHandler sets a custom handler for the end of a job
 func (worker *Worker) SetPreConsumeHandler(handler func(*Worker) bool) {
 	worker.preConsumeHandler = handler
 }
 
-//GetServer returns server
+// GetServer returns server
 func (worker *Worker) GetServer() *Server {
 	return worker.server
 }
 
-//
 func (worker *Worker) PreConsumeHandler() bool {
 	if worker.preConsumeHandler == nil {
 		return true
