@@ -29,6 +29,12 @@ type BrokerGR struct {
 	consumingWG  sync.WaitGroup // wait group to make sure whole consumption completes
 	processingWG sync.WaitGroup // use wait group to make sure task processing completes
 	delayedWG    sync.WaitGroup
+	// stopMu guards stopped. StartConsuming checks stopped and calls
+	// consumingWG.Add under stopMu, so the Add either happens before
+	// StopConsuming's consumingWG.Wait, or StartConsuming sees the stop and
+	// never starts consuming.
+	stopMu  sync.Mutex
+	stopped bool
 	// If set, path to a socket file overrides hostname
 	socketPath           string
 	redsync              *redsync.Redsync
@@ -73,7 +79,13 @@ func NewGR(cnf *config.Config, addrs []string, db int) iface.Broker {
 
 // StartConsuming enters a loop and waits for incoming messages
 func (b *BrokerGR) StartConsuming(consumerTag string, concurrency int, taskProcessor iface.TaskProcessor) (bool, error) {
+	b.stopMu.Lock()
+	if b.stopped {
+		b.stopMu.Unlock()
+		return false, errs.ErrConsumerStopped
+	}
 	b.consumingWG.Add(1)
+	b.stopMu.Unlock()
 	defer b.consumingWG.Done()
 
 	if concurrency < 1 {
@@ -174,11 +186,17 @@ func (b *BrokerGR) StartConsuming(consumerTag string, concurrency int, taskProce
 
 // StopConsuming quits the loop
 func (b *BrokerGR) StopConsuming() {
+	b.stopMu.Lock()
+	b.stopped = true
+	b.stopMu.Unlock()
+
 	b.Broker.StopConsuming()
+	// Waiting for consumption to finish. This must come before delayedWG.Wait:
+	// StartConsuming calls delayedWG.Add, and only returning from it makes that
+	// Add happen before the Wait below.
+	b.consumingWG.Wait()
 	// Waiting for the delayed tasks goroutine to have stopped
 	b.delayedWG.Wait()
-	// Waiting for consumption to finish
-	b.consumingWG.Wait()
 
 	b.rclient.Close()
 }

@@ -72,3 +72,23 @@ func TestStopConsuming(t *testing.T) {
 		}
 	})
 }
+
+// TestStopConsumingRetryRace checks that the retry flag can be read by the
+// consuming goroutine while StopConsuming clears it (run with -race).
+func TestStopConsumingRetryRace(t *testing.T) {
+	t.Parallel()
+
+	broker := common.NewBroker(&config.Config{
+		DefaultQueue: "queue",
+	})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 1000; i++ {
+			broker.GetRetry()
+		}
+	}()
+	broker.StopConsuming()
+	<-done
+	assert.False(t, broker.GetRetry())
+}
